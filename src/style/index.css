@@ -1,0 +1,74 @@
+@import './App.css';
+@import '../components/header/_header.css';
+@import '../components/webcamImg/_webcamImg.css';
+@import '../components/webcamImg/_webcamImg.css';
+@import '../components/info/_info.css';
+@import '../components/infoIcon/_infoIcon.css';
+/* --- MEVCUT IMPORTLARA DOKUNMA (ÜST TARAF KALSIN) --- */
+/* --- AŞAĞIYA BUNLARI EKLE: PREMIUM BLACK & GOLD TEMA --- */
+
+/* 1. Tüm Arka Planı Siyah/Antrasit Yap */
+/* 1. Tüm Arka Planı ve Uygulama Çerçevesini Siyah Yap */
+/* 1. KESİN ÇÖZÜM: Html, Body ve Root Elementini Siyah Yap */
+html, body, #root, .container-app {
+  background: linear-gradient(135deg, #0d0d0d 0%, #1a1a1a 100%) !important;
+  background-attachment: fixed !important; /* Arka planı sabitle */
+  background-color: #0d0d0d !important; /* Yüklenmezse siyah olsun */
+  color: #ffffff !important;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+}
+
+/* Ekstra Önlem: Header'da eski resim kalmasın */
+header {
+  background-image: none !important;
+  background-color: #0d0d0d !important;
+}
+
+/* 2. Ortadaki Kartları Cam Gibi Yap ve Altın Çerçeve Ekle */
+.container-card, .container-display, .container-img {
+  background-color: rgba(20, 20, 20, 0.85) !important; /* Koyu transparan */
+  border: 2px solid #D4AF37 !important; /* ALTIN ÇERÇEVE */
+  border-radius: 15px !important;
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.2) !important; /* Hafif altın parlaması */
+}
+
+/* Kart içindeki yazı renkleri */
+.container-card p, .values p {
+  color: #f0f0f0 !important;
+}
+
+/* 3. Butonları Altın Külçesine Çevir */
+button {
+  background: linear-gradient(to bottom, #D4AF37, #B59020) !important; /* Altın Gradyan */
+  color: #000000 !important; /* Siyah Yazı */
+  border: 1px solid #FFE570 !important; /* Parlak kenar */
+  font-weight: bold !important;
+  text-transform: uppercase;
+  box-shadow: 0 4px 10px rgba(0,0,0,0.5) !important;
+}
+
+/* Tıklayınca Efekt */
+button:active {
+  transform: scale(0.98);
+  background: #B59020 !important;
+}
+
+/* 4. "Tekrar Dene" ve "Talimatlar" gibi ikincil butonlar */
+#retake-btn, #show-info-btn {
+  background: transparent !important;
+  border: 2px solid #D4AF37 !important;
+  color: #D4AF37 !important;
+}
+
+/* 5. Üstteki Başlık (Header) Çizgisi */
+.header {
+  background-color: #111111 !important; /* Header arka planı siyah */
+  border-bottom: 2px solid #D4AF37 !important; /* Altına altın çizgi */
+}
+
+.header h1 {
+  color: #D4AF37 !important; /* Başlık yazısı altın rengi */
+}
+

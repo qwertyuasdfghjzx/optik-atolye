@@ -1,0 +1,74 @@
+@import url("https://fonts.cdnfonts.com/css/avenir-lt-std");
+
+* {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+}
+
+body {
+  font-family: Avenir LT Std, Arial, Helvetica, sans-serif;
+}
+
+main {
+  background-image: linear-gradient(
+    to bottom,
+    #2f5581,
+    #335c8b,
+    #366295,
+    #3a69a0,
+    #3e70aa,
+    #567db4,
+    #6c8abf,
+    #8097c9,
+    #a5afd6,
+    #c5c8e3,
+    #e3e3f1,
+    #ffffff
+  );
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+}
+
+button {
+  background-color: #4379b8;
+  color: #fff;
+  font-size: 1rem;
+  width: 10rem;
+  margin: 0 1rem;
+  padding: 0.75rem 2rem;
+  border-radius: 1.5rem;
+  cursor: pointer;
+}
+
+button:hover {
+  background-color: #2f5581;
+}
+
+@media only screen and (max-width: 770px) {
+  button {
+    width: 9rem;
+    margin: 0 0.5rem;
+    padding: 0.75rem 1rem;
+  }
+}
+
+@media only screen and (max-width: 430px) {
+  button {
+    font-size: 0.9rem;
+    width: 7rem;
+    padding: 0.5rem;
+  }
+}
+
+@media only screen and (max-width: 390px) {
+  button {
+    font-size: 0.85rem;
+    width: 6rem;
+    padding: 0.4rem;
+  }
+}
