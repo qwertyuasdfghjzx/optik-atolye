@@ -1,13 +1,16 @@
-import { serve } from "https://deno.land/std@0.140.0/http/server.ts";
-import { serveDir } from "https://deno.land/std@0.140.0/http/file_server.ts";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { serveDir } from "https://deno.land/std@0.177.0/http/file_server.ts";
+
+console.log("Sunucu baslatiliyor...");
 
 serve((req) => {
+  const url = new URL(req.url);
+  console.log("İstek geldi:", url.pathname);
+
+  // Dosyaları "build" klasöründen sun
   return serveDir(req, {
-    fsRoot: "build", // React'in oluşturduğu klasör
-    urlRoot: "",
-    showDirListing: false,
-    enableCors: true,
+    fsRoot: "build",
+    // Eğer dosya bulunamazsa (404), index.html'i dene (SPA desteği)
+    showDirListing: true,
   });
 });
-
-console.log("Listening on http://localhost:8000");
