@@ -1,7 +1,5 @@
 // Copyright 2023 MediaPipe & Malgorzata Pick
-// ENGINEERING MODE: %100 Referans Nesne Tabanlı Ölçüm
-// Formül: (Veritabanı MM / Kutu Piksel) * PD Piksel
-
+// SENSOR FUSION MODE: 4-Way Averaging (Global + Vertical + Iris + Bridge)
 import React, { Fragment, useEffect, useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import { FaceMesh, FACEMESH_LEFT_IRIS, FACEMESH_RIGHT_IRIS } from "@mediapipe/face_mesh";
@@ -9,41 +7,36 @@ import Info from "../../components/info/Info";
 import GlassesSelect from "../GlassesSelect"; 
 
 const WebcamImg = () => {
-  // --- TEMEL REFERANSLAR ---
+  // --- REFLER ---
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const requestRef = useRef(null);
-  
-  // Döngü içinde anlık erişim için
   const calibrationDataRef = useRef(null); 
-  const boxSettingsRef = useRef({ w: 1.1, h: 1.0, y: 0 }); // w: Genişlik, h: Yükseklik, y: Konum
+  const boxSettingsRef = useRef({ w: 1.0, h: 1.0, y: 0 }); // Slider
 
-  // Veri Stabilizasyonu
   const latestDataRef = useRef({ pd: 0, left: 0, right: 0, hLeft: 0, hRight: 0 });
   const pdBufferRef = useRef([]); 
-  const BUFFER_SIZE = 15; 
+  const BUFFER_SIZE = 10; 
 
-  // --- STATE (GÖRÜNÜM) ---
+  // --- STATE ---
   const [appState, setAppState] = useState("home");
   const [imgSrc, setImgSrc] = useState(null);
   const [facingMode, setFacingMode] = useState("user"); 
   const [isModelLoaded, setIsModelLoaded] = useState(false);
 
-  // Ekranda Görünenler
+  // UI
   const [displayPD, setDisplayPD] = useState("--");     
   const [calibrationData, setCalibrationData] = useState(null);
-  const [boxSettings, setBoxSettings] = useState({ w: 1.1, h: 1.0, y: 0 });
-
-  const [uiStatus, setUiStatus] = useState({ message: "YÜZ ARANIYOR...", color: "red", isReady: false });
+  const [boxSettings, setBoxSettings] = useState({ w: 1.0, h: 1.0, y: 0 });
+  const [uiStatus, setUiStatus] = useState({ message: "YÜZ ARANIYOR...", color: "red" });
   const [finalResult, setFinalResult] = useState({ pd: "--", left: "--", right: "--", hLeft: "--", hRight: "--" });
 
-  // --- FONKSİYONLAR ---
-
+  // --- HANDLERS ---
   const handleFrameSelect = (data) => {
       setCalibrationData(data);
       calibrationDataRef.current = data;
-      // Gözlük seçilince ayarları sıfırla
-      const def = { w: 1.1, h: 1.0, y: 0 };
+      // Sıfırla
+      const def = { w: 1.0, h: 1.0, y: 0 };
       setBoxSettings(def);
       boxSettingsRef.current = def;
   };
@@ -61,27 +54,22 @@ const WebcamImg = () => {
     setFacingMode(prev => prev === "environment" ? "user" : "environment");
   }, []);
 
-  const videoConstraints = {
-    width: { ideal: 640 }, height: { ideal: 480 },
-    facingMode: facingMode
-  };
+  const videoConstraints = { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: facingMode };
 
   const getDistance = (p1, p2) => {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
   };
 
-  // Smoothing (Sonuç titremesin diye ortalama alma)
+  // --- DATA SMOOTHING ---
   const updateSmoothedData = (newPD, newLeft, newRight, hLeft, hRight) => {
     if (!newPD || isNaN(newPD) || newPD < 40 || newPD > 80) return;
-    
-    // Ani sıçrama filtresi
-    if (latestDataRef.current.pd > 0 && Math.abs(newPD - latestDataRef.current.pd) > 10) return; 
+    if (latestDataRef.current.pd > 0 && Math.abs(newPD - latestDataRef.current.pd) > 5) return; 
 
     pdBufferRef.current.push({ pd: newPD, left: newLeft, right: newRight, hl: hLeft, hr: hRight });
     if (pdBufferRef.current.length > BUFFER_SIZE) pdBufferRef.current.shift();
 
     const count = pdBufferRef.current.length;
-    if (count < 5) return; 
+    if (count < 3) return;
 
     const total = pdBufferRef.current.reduce((acc, curr) => ({
         pd: acc.pd + curr.pd, left: acc.left + curr.left, right: acc.right + curr.right,
@@ -98,47 +86,12 @@ const WebcamImg = () => {
     setDisplayPD(latestDataRef.current.pd);
   };
 
-  // Mesafe ve Açı Kontrolü
-  const checkPosition = (pupilLeft, pupilRight, faceWidthPx, canvasWidth) => {
-    const eyeYDiff = Math.abs(pupilLeft.y - pupilRight.y);
-    const maxTilt = 15; 
-    
-    // Yüzün ekranda kapladığı alan (Mobilde %35-70 arası ideal)
-    const ratio = faceWidthPx / canvasWidth;
-    
-    let msg = "", clr = "red", ready = false;
-
-    if (eyeYDiff > maxTilt) { 
-        msg = "Kafayı Düz Tut"; 
-        clr = "#FFC107"; 
-    } 
-    else if (ratio < 0.35) { 
-        msg = "Yaklaş"; 
-        clr = "#FFC107"; 
-    } 
-    else if (ratio > 0.70) { 
-        msg = "Uzaklaş"; 
-        clr = "red"; 
-    } 
-    else { 
-        msg = "Mükemmel"; 
-        clr = "#00FF00"; 
-        ready = true; 
-    }
-    
-    setUiStatus({ message: msg, color: clr, isReady: ready });
-  };
-
-  // --- MEDIAPIPE CORE ---
+  // --- MEDIAPIPE LOOP ---
   useEffect(() => {
     if (appState !== "camera") return;
 
     const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
-    
-    faceMesh.setOptions({
-        maxNumFaces: 1, refineLandmarks: true, 
-        minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 
-    });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
     
     faceMesh.onResults((results) => {
       setIsModelLoaded(true);
@@ -171,33 +124,79 @@ const WebcamImg = () => {
         const pupilRight = toPx(landmarks[473]);
         const lCheek = toPx(landmarks[234]);
         const rCheek = toPx(landmarks[454]);
-        
-        // Ham Yüz Genişliği (Piksel)
-        const rawFaceWidthPx = getDistance(lCheek, rCheek);
-        checkPosition(pupilLeft, pupilRight, rawFaceWidthPx, videoWidth);
+        const lInner = toPx(landmarks[133]); // Göz Pınarı Sol
+        const rInner = toPx(landmarks[362]); // Göz Pınarı Sağ
 
-        // --- HESAPLAMA MANTIĞI (SENİN İSTEDİĞİN MÜHENDİSLİK KISMI) ---
+        // İris Çapı (Yaklaşık)
+        const lIrisDia = getDistance(toPx(landmarks[468]), toPx(landmarks[474])) * 2; // Yarıçap * 2
+        const rIrisDia = getDistance(toPx(landmarks[473]), toPx(landmarks[479])) * 2;
+        const avgIrisDiaPx = (lIrisDia + rIrisDia) / 2;
+
+        // --- 1. MESAFE KONTROLÜ (UI Status) ---
+        const rawFaceWidthPx = getDistance(lCheek, rCheek);
+        const ratio = rawFaceWidthPx / videoWidth;
+        let msg = "HAZIR", color = "#00FF00";
+        
+        if (Math.abs(pupilLeft.y - pupilRight.y) > 15) { msg = "BAŞINIZI DİK TUTUN"; color = "red"; }
+        else if (ratio < 0.35) { msg = "YAKLAŞIN (40cm)"; color = "#FFC107"; }
+        else if (ratio > 0.65) { msg = "UZAKLAŞIN"; color = "red"; }
+        setUiStatus({ message: msg, color });
+
+        // --- 2. MULTI-FACTOR HESAPLAMA MOTORU ---
         const calData = calibrationDataRef.current; 
         const settings = boxSettingsRef.current;
-        let mmPerPixel = 0;
-        
-        // 1. Kırmızı Kutunun Ekranda Kapladığı Piksel (Kullanıcı Ayarladı)
-        // rawFaceWidthPx sadece kutunun kafayla beraber hareket etmesini sağlar.
-        // Asıl boyut 'settings.w' (Slider) ile belirlenir.
-        const boxPixelWidth = rawFaceWidthPx * settings.w; 
+        let ratios = []; // Bulunan tüm oranları toplayacağız
 
-        if (calData && calData.width) {
-            // MÜHENDİSLİK FORMÜLÜ:
-            // Gerçek MM / Ekran Pikseli = Ölçek
-            mmPerPixel = calData.width / boxPixelWidth;
+        // A) İRİS ORANI (Her zaman var)
+        if (avgIrisDiaPx > 0) {
+            ratios.push(11.7 / avgIrisDiaPx); // İris Standardı 11.7mm
         }
 
-        if (mmPerPixel > 0) {
-            // PD Hesapla
+        // B) ÇERÇEVE KUTUSU ORANI (Varsa)
+        let boxW = 0, boxH = 0, centerX = 0, centerY = 0;
+        
+        if (calData && calData.width) {
+            // Slider hesaplamaları
+            boxW = rawFaceWidthPx * settings.w; 
+            
+            // Oran 1: Toplam Genişlik
+            ratios.push(calData.width / boxW);
+
+            // Oran 2: Lens Yüksekliği (Eğer veritabanında varsa)
+            if (calData.height) {
+                // Standart gözlük oranı 0.35'tir ama slider ile kullanıcı ayarlar
+                boxH = boxW * 0.35 * settings.h; 
+                // Eğer kullanıcı kutuyu dikeyde oturttysa, bu oran da geçerlidir
+                ratios.push(calData.height / boxH);
+            } else {
+                boxH = boxW * 0.35 * settings.h;
+            }
+
+            // Oran 3: Köprü (Bridge) Kontrolü (Göz pınarları arası)
+            if (calData.bridge) {
+                const bridgePx = getDistance(lInner, rInner);
+                // Göz pınarı mesafesi ~ Köprü + 2-3mm (basit heuristik)
+                // Bu sadece aşırı sapmaları dengelemek için hafif ağırlıklı eklenir
+                const approximateBridgeRatio = (calData.bridge + 2) / bridgePx;
+                ratios.push(approximateBridgeRatio);
+            }
+
+            // Çizim koordinatları
+            centerX = (pupilLeft.x + pupilRight.x) / 2;
+            centerY = ((pupilLeft.y + pupilRight.y) / 2) + settings.y;
+        }
+
+        // --- 3. ORTALAMA ALMA (AVERAGING) ---
+        let mmPerPixel = 0;
+        if (ratios.length > 0) {
+            const sum = ratios.reduce((a, b) => a + b, 0);
+            mmPerPixel = sum / ratios.length;
+        }
+
+        if (mmPerPixel > 0 && color === "#00FF00") {
             const pdPx = getDistance(pupilLeft, pupilRight);
             const totalPD = pdPx * mmPerPixel;
             
-            // Diğer Ölçümler
             const noseTip = toPx(landmarks[1]);
             const noseBridge = toPx(landmarks[168]);
             const distLeftPx = getDistance(pupilLeft, noseBridge);
@@ -218,38 +217,40 @@ const WebcamImg = () => {
 
         // --- ÇİZİMLER ---
         
-        // 1. KIRMIZI KUTU (Referans)
+        // 1. KIRMIZI KUTU (HİZALAMA)
         if (calData && calData.width) {
-            canvasCtx.strokeStyle = "rgba(255, 0, 0, 0.9)";
+            canvasCtx.strokeStyle = "rgba(255, 0, 0, 0.8)";
             canvasCtx.lineWidth = 3;
-            
-            // Kutunun Merkezi = İki gözün ortası + Y Kaydırma
-            const centerX = (pupilLeft.x + pupilRight.x) / 2;
-            const centerY = ((pupilLeft.y + pupilRight.y) / 2) + settings.y;
-            
-            const boxW = boxPixelWidth;
-            const boxH = boxW * 0.35 * settings.h; // Gözlük oranı
-
             canvasCtx.strokeRect(centerX - boxW/2, centerY - boxH/2, boxW, boxH);
             
-            // Genişlik Bilgisi (Kullanıcıya Doğru Yaptığını Göstermek İçin)
             canvasCtx.fillStyle = "red";
             canvasCtx.font = "bold 14px Arial";
             canvasCtx.textAlign = "center";
             canvasCtx.save();
             const textY = centerY - boxH/2 - 10;
-            const label = `Gözlük: ${calData.width}mm`;
             if(facingMode === "user") {
                  canvasCtx.translate(centerX, textY);
                  canvasCtx.scale(-1, 1);
-                 canvasCtx.fillText(label, 0, 0);
+                 canvasCtx.fillText(`${calData.width}mm`, 0, 0);
             } else {
-                 canvasCtx.fillText(label, centerX, textY);
+                 canvasCtx.fillText(`${calData.width}mm`, centerX, textY);
             }
             canvasCtx.restore();
         }
 
-        // 2. Göz Bebekleri
+        // 2. MONTAJ YÜKSEKLİĞİ (CYAN)
+        const noseTip = toPx(landmarks[1]);
+        canvasCtx.strokeStyle = "cyan";
+        canvasCtx.lineWidth = 2;
+        canvasCtx.setLineDash([4, 2]);
+        canvasCtx.beginPath();
+        canvasCtx.moveTo(pupilLeft.x, pupilLeft.y); canvasCtx.lineTo(pupilLeft.x, noseTip.y);
+        canvasCtx.moveTo(pupilRight.x, pupilRight.y); canvasCtx.lineTo(pupilRight.x, noseTip.y);
+        canvasCtx.moveTo(pupilLeft.x - 20, noseTip.y); canvasCtx.lineTo(pupilRight.x + 20, noseTip.y);
+        canvasCtx.stroke();
+        canvasCtx.setLineDash([]);
+
+        // 3. GÖZ BEBEKLERİ
         canvasCtx.strokeStyle = "#00FF00";
         canvasCtx.lineWidth = 2;
         [pupilLeft, pupilRight].forEach(p => {
@@ -258,21 +259,8 @@ const WebcamImg = () => {
             canvasCtx.stroke();
         });
 
-        // 3. Montaj Yüksekliği Çizgileri (Cyan)
-        const noseTip = toPx(landmarks[1]); 
-        canvasCtx.strokeStyle = "cyan";
-        canvasCtx.lineWidth = 2;
-        canvasCtx.beginPath();
-        // Sol Dikey
-        canvasCtx.moveTo(pupilLeft.x, pupilLeft.y); canvasCtx.lineTo(pupilLeft.x, noseTip.y);
-        // Sağ Dikey
-        canvasCtx.moveTo(pupilRight.x, pupilRight.y); canvasCtx.lineTo(pupilRight.x, noseTip.y);
-        // Yatay
-        canvasCtx.moveTo(pupilLeft.x - 20, noseTip.y); canvasCtx.lineTo(pupilRight.x + 20, noseTip.y);
-        canvasCtx.stroke();
-
       } else {
-          setUiStatus({ isReady: false, message: "YÜZ ARANIYOR...", color: "red" });
+          setUiStatus({ message: "YÜZ ARANIYOR...", color: "red" });
       }
       canvasCtx.restore(); 
     });
@@ -291,13 +279,11 @@ const WebcamImg = () => {
     };
   }, [facingMode, appState]);
 
-  // --- AKSİYONLAR ---
+  // --- ACTIONS ---
   const capturePhoto = () => {
     const frozenData = latestDataRef.current;
-    if (!frozenData || frozenData.pd === 0 || frozenData.pd === "--") {
-        alert("Lütfen önce yüzünüzü tanıtın.");
-        return;
-    }
+    if (!frozenData || frozenData.pd === 0) return; // Boş çekimi önle
+    
     setFinalResult({
         pd: frozenData.pd, left: frozenData.left, right: frozenData.right,
         hLeft: frozenData.heightLeft, hRight: frozenData.heightRight
@@ -318,7 +304,7 @@ const WebcamImg = () => {
   const absFull = { position: 'absolute', width: '100%', height: '100%', objectFit: 'contain' };
   const sliderRow = { display: 'flex', alignItems: 'center', marginBottom: '5px', color: 'white', fontSize: '0.75rem' };
   const sliderInput = { flex: 1, marginLeft: '5px', accentColor: '#D4AF37', cursor: 'pointer' };
-  const bigBtnStyle = { padding: '15px 40px', fontSize: '1.2rem', backgroundColor: '#D4AF37', border: 'none', borderRadius: '30px', fontWeight: 'bold', marginTop: '20px', cursor: 'pointer', display: 'flex', justifyContent: 'center', alignItems: 'center' };
+  const bigBtnStyle = { padding: '15px 40px', fontSize: '1.2rem', backgroundColor: '#D4AF37', border: 'none', borderRadius: '30px', fontWeight: 'bold', marginTop: '20px', cursor: 'pointer' };
 
   return (
     <Fragment>
@@ -335,7 +321,7 @@ const WebcamImg = () => {
           <div style={scrollable}>
              <div style={{padding: '20px', paddingBottom: '100px', minHeight: '100%'}}>
                 <Info />
-                <button onClick={() => setAppState("camera")} style={{...bigBtnStyle, width: '100%', borderRadius: '10px', boxShadow: '0 0 15px rgba(212, 175, 55, 0.5)'}}>KAMERAYI AÇ VE ÖLÇ</button>
+                <button onClick={() => setAppState("camera")} style={{...bigBtnStyle, width: '100%', borderRadius: '10px'}}>KAMERAYI AÇ VE ÖLÇ</button>
              </div>
           </div>
         )}
@@ -345,22 +331,22 @@ const WebcamImg = () => {
             <div style={videoContainer}>
               {!isModelLoaded && <div style={{position: 'absolute', zIndex: 100, color: '#D4AF37'}}><h3>Başlatılıyor...</h3></div>}
 
-              {/* Üst Uyarı */}
-              <div style={{position: 'absolute', top: 0, left: 0, width: '100%', padding: '5px', background: 'rgba(0,0,0,0.6)', zIndex: 60, textAlign: 'center'}}>
-                  <span style={{color: uiStatus.color, fontWeight: 'bold', fontSize: '1rem'}}>{uiStatus.message}</span>
+              {/* UYARI BANDI (SABİT) */}
+              <div style={{position: 'absolute', top: 0, left: 0, width: '100%', padding: '10px', background: 'rgba(0,0,0,0.7)', zIndex: 60, textAlign: 'center'}}>
+                  <span style={{color: uiStatus.color, fontWeight: 'bold', fontSize: '1.1rem'}}>{uiStatus.message}</span>
               </div>
 
               {/* Gözlük Seçimi */}
-              <div style={{position: 'absolute', top: '40px', left: '50%', transform: 'translateX(-50%)', width: '95%', maxWidth: '400px', zIndex: 50}}>
+              <div style={{position: 'absolute', top: '50px', left: '50%', transform: 'translateX(-50%)', width: '95%', maxWidth: '400px', zIndex: 50}}>
                   <GlassesSelect onFrameSelect={handleFrameSelect} />
               </div>
 
-              {/* HASSAS AYAR PANELI (Sliderlar) */}
+              {/* Slider Paneli */}
               {calibrationData && calibrationData.width && (
                   <div style={{position: 'absolute', bottom: '10px', left: '50%', transform: 'translateX(-50%)', width: '90%', maxWidth: '400px', zIndex: 55, backgroundColor: 'rgba(0,0,0,0.6)', padding: '5px', borderRadius: '8px', border: '1px solid #444'}}>
                       <div style={sliderRow}>
                           <span style={{width: '60px'}}>↔ Genişlik</span>
-                          <input type="range" min="0.8" max="1.4" step="0.002" value={boxSettings.w} onChange={(e) => updateBox('w', e.target.value)} style={sliderInput} />
+                          <input type="range" min="0.8" max="1.4" step="0.005" value={boxSettings.w} onChange={(e) => updateBox('w', e.target.value)} style={sliderInput} />
                       </div>
                       <div style={sliderRow}>
                           <span style={{width: '60px'}}>↕ Yükseklik</span>
@@ -380,7 +366,7 @@ const WebcamImg = () => {
             {/* Alt Panel */}
             <div style={{ width: '100%', padding: '10px', background: '#111', zIndex: 70, display: 'flex', flexDirection: 'column', alignItems: 'center', borderTop: '1px solid #333' }}>
                 <div style={{ marginBottom: '5px', textAlign: 'center' }}>
-                    <span style={{ fontSize: "1.8rem", fontWeight: "bold", color: uiStatus.isReady ? "#00FF00" : "#555" }}>{displayPD}</span>
+                    <span style={{ fontSize: "1.8rem", fontWeight: "bold", color: uiStatus.color === "#00FF00" ? "#00FF00" : "#fff" }}>{displayPD}</span>
                     <span style={{ fontSize: "0.9rem", color: "white" }}> mm</span>
                 </div>
                 <div style={{display: 'flex', gap: '10px', width: '100%', maxWidth: '400px'}}>
