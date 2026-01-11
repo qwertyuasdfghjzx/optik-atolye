@@ -1,4 +1,5 @@
 // Copyright 2023 MediaPipe & Malgorzata Pick
+// Geliştirilmiş Versiyon - Optik Atölye
 import React, { Fragment, useEffect, useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
 import {
@@ -16,11 +17,11 @@ const WebcamImg = () => {
   // Veri Havuzları
   const latestDataRef = useRef({ pd: 0, left: 0, right: 0, hLeft: 0, hRight: 0 });
   const pdBufferRef = useRef([]); 
-  const BUFFER_SIZE = 20; 
+  const BUFFER_SIZE = 30; // Daha stabil olması için buffer artırıldı
 
   const [imgSrc, setImgSrc] = useState(null);
   
-  // --- KAMERA AYARLARI ---
+  // --- KAMERA AYARLARI (GÜNCELLENDİ: HD ÇÖZÜNÜRLÜK) ---
   const [facingMode, setFacingMode] = useState("environment"); 
 
   const [displayPD, setDisplayPD] = useState("--");     
@@ -45,7 +46,10 @@ const WebcamImg = () => {
     setFacingMode(prev => prev === "environment" ? "user" : "environment");
   }, []);
 
+  // Çözünürlük İyileştirmesi
   const videoConstraints = {
+    width: { ideal: 1280 },
+    height: { ideal: 720 },
     facingMode: facingMode === "user" ? "user" : { exact: "environment" }
   };
 
@@ -54,13 +58,35 @@ const WebcamImg = () => {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
   };
 
+  // --- GELİŞMİŞ SMOOTHING (TİTREMEYİ ENGELLEYEN FONKSİYON) ---
   const updateSmoothedData = (newPD, newLeft, newRight, hLeft, hRight) => {
-    if (!newPD || newPD <= 0 || isNaN(newPD)) return;
+    // 1. Mantıksız değerleri at (İnsan anatomisine aykırı)
+    if (!newPD || newPD < 45 || newPD > 80 || isNaN(newPD)) return;
+
+    // 2. Ani sıçramaları engelle (Önceki ortalamadan 5mm fark varsa alma)
+    if (latestDataRef.current.pd > 0 && Math.abs(newPD - latestDataRef.current.pd) > 5) {
+        return; 
+    }
 
     pdBufferRef.current.push({ pd: newPD, left: newLeft, right: newRight, hl: hLeft, hr: hRight });
+    
+    // Buffer dolduysa en eskiyi sil
     if (pdBufferRef.current.length > BUFFER_SIZE) pdBufferRef.current.shift();
 
-    const total = pdBufferRef.current.reduce((acc, curr) => ({
+    // ORTALAMA ALMA (Outlier Temizliği ile - Trimmed Mean)
+    // En düşük ve en yüksek değerleri atıp ortadakilerin ortalamasını alıyoruz.
+    const sortedBuffer = [...pdBufferRef.current].sort((a, b) => a.pd - b.pd);
+    
+    let validData = sortedBuffer;
+    if (sortedBuffer.length > 6) {
+        validData = sortedBuffer.slice(2, -2); // En uçtaki 2 düşük ve 2 yüksek değeri at
+    }
+
+    const count = validData.length;
+    // Eğer veri yoksa çık
+    if (count === 0) return;
+
+    const total = validData.reduce((acc, curr) => ({
         pd: acc.pd + curr.pd,
         left: acc.left + curr.left,
         right: acc.right + curr.right,
@@ -68,8 +94,6 @@ const WebcamImg = () => {
         hr: acc.hr + curr.hr
       }), { pd: 0, left: 0, right: 0, hl:0, hr:0 });
 
-    const count = pdBufferRef.current.length;
-    
     latestDataRef.current = {
         pd: (total.pd / count).toFixed(1),
         left: (total.left / count).toFixed(1),
@@ -83,17 +107,17 @@ const WebcamImg = () => {
     setDisplayRight(latestDataRef.current.right);
   };
 
-  // --- POZİSYON KONTROL MANTIĞI (GÜNCELLENDİ - DAHA KATI) ---
+  // --- POZİSYON KONTROL MANTIĞI (SIKI MESAFE KONTROLÜ) ---
   const checkPosition = (pupilLeft, pupilRight, avgIrisWidthPx, canvasWidth) => {
-    // 1. AÇI KONTROLÜ (Daha hassas)
+    // 1. AÇI KONTROLÜ
     const eyeYDiff = Math.abs(pupilLeft.y - pupilRight.y);
-    const maxTilt = 10; // Toleransı 20'den 10'a düşürdük (Daha dik tutmalı)
+    const maxTilt = 8; // Daha hassas eğim kontrolü
 
-    // 2. MESAFE KONTROLÜ (40cm'e zorlamak için daraltıldı)
-    // İris boyutu ekranın %3'ünden küçükse -> Çok Uzak
-    // İris boyutu ekranın %4'ünden büyükse -> Çok Yakın (Seni geriye iter)
-    const minIrisSize = canvasWidth * 0.030; 
-    const maxIrisSize = canvasWidth * 0.040; 
+    // 2. MESAFE KONTROLÜ (Tolerans Daraltıldı)
+    // İris boyutu ekranın belirli bir yüzdesinde olmalı.
+    // Bu, kullanıcının yaklaşık 40-50cm mesafede durmasını sağlar.
+    const minIrisSize = canvasWidth * 0.032; 
+    const maxIrisSize = canvasWidth * 0.038; 
 
     let msg = "";
     let clr = "red";
@@ -106,10 +130,10 @@ const WebcamImg = () => {
         msg = "BİRAZ YAKLAŞIN";
         clr = "#FFC107";
     } else if (avgIrisWidthPx > maxIrisSize) {
-        msg = "UZAKLAŞIN (40 cm)";
+        msg = "UZAKLAŞIN";
         clr = "red";
     } else {
-        msg = "MÜKEMMEL - ÇEKİM YAPIN";
+        msg = "MÜKEMMEL - SABİT DURUN";
         clr = "#00FF00"; 
         ready = true;
     }
@@ -120,7 +144,7 @@ const WebcamImg = () => {
   // --- MEDIAPIPE ---
   useEffect(() => {
     const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
-    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
     
     faceMesh.onResults((results) => {
       const canvasElement = canvasRef.current;
@@ -135,7 +159,7 @@ const WebcamImg = () => {
 
       const canvasCtx = canvasElement.getContext("2d");
       
-      // --- ÇİZİM BAŞLANGICI (GLOBAL TRANSORM) ---
+      // --- ÇİZİM BAŞLANGICI ---
       canvasCtx.save(); 
       canvasCtx.clearRect(0, 0, width, height);
       
@@ -145,7 +169,7 @@ const WebcamImg = () => {
         canvasCtx.scale(-1, 1);
       }
       
-      // Videoyu çiz (Ters veya düz)
+      // Videoyu çiz
       canvasCtx.drawImage(results.image, 0, 0, width, height);
 
       let hasFace = false;
@@ -170,7 +194,8 @@ const WebcamImg = () => {
         // KONTROLÜ ÇAĞIR
         checkPosition(pupilLeft, pupilRight, avgIrisWidthPx, width);
 
-        // HESAPLAMALAR
+        // HESAPLAMALAR (Sadece pozisyon doğruysa veya veri topluyorsak)
+        // 11.7mm ortalama iris çapı sabiti
         const mmPerPixel = 11.7 / avgIrisWidthPx;
         const totalDistancePx = getDistance(pupilLeft, pupilRight);
         const totalPD = totalDistancePx * mmPerPixel;
@@ -188,11 +213,14 @@ const WebcamImg = () => {
         const hLeftMM = hLeftPx * mmPerPixel;
         const hRightMM = hRightPx * mmPerPixel;
 
+        // Veriyi Smoothed Fonksiyona Gönder
         updateSmoothedData(totalPD, pdLeft, pdRight, hLeftMM, hRightMM);
 
         // YÜZ ÜZERİNDEKİ ÇİZİMLER
         canvasCtx.lineWidth = 2;
         canvasCtx.strokeStyle = "#00FF00";
+        
+        // Göz bebeklerine artı işareti
         const drawCross = (x, y) => {
             canvasCtx.beginPath();
             canvasCtx.moveTo(x - 10, y); canvasCtx.lineTo(x + 10, y);
@@ -202,24 +230,24 @@ const WebcamImg = () => {
         drawCross(pupilLeft.x, pupilLeft.y);
         drawCross(pupilRight.x, pupilRight.y);
 
+        // İki göz arası çizgi
         canvasCtx.beginPath();
-        canvasCtx.moveTo(pupilLeft.x - 40, pupilLeft.y);
-        canvasCtx.lineTo(pupilRight.x + 40, pupilRight.y);
+        canvasCtx.moveTo(pupilLeft.x, pupilLeft.y);
+        canvasCtx.lineTo(pupilRight.x, pupilRight.y);
+        canvasCtx.strokeStyle = "rgba(0, 255, 0, 0.5)";
         canvasCtx.stroke();
 
-        canvasCtx.strokeStyle = "#FFC107";
-        canvasCtx.beginPath();
-        canvasCtx.moveTo(pupilLeft.x - 30, noseTip.y);
-        canvasCtx.lineTo(pupilRight.x + 30, noseTip.y);
-        canvasCtx.stroke();
-
+        // Burun ve Göz çizgileri (PD gösterimi)
         canvasCtx.setLineDash([5, 5]);
         canvasCtx.beginPath();
-        canvasCtx.moveTo(pupilLeft.x, pupilLeft.y); canvasCtx.lineTo(pupilLeft.x, noseTip.y);
-        canvasCtx.moveTo(pupilRight.x, pupilRight.y); canvasCtx.lineTo(pupilRight.x, noseTip.y);
+        canvasCtx.moveTo(pupilLeft.x, pupilLeft.y); canvasCtx.lineTo(pupilLeft.x, noseTip.y + 50);
+        canvasCtx.moveTo(pupilRight.x, pupilRight.y); canvasCtx.lineTo(pupilRight.x, noseTip.y + 50);
+        canvasCtx.moveTo(noseBridge.x, noseBridge.y); canvasCtx.lineTo(noseBridge.x, noseTip.y + 50);
+        canvasCtx.strokeStyle = "#FFC107";
         canvasCtx.stroke();
         canvasCtx.setLineDash([]);
         
+        // Burun Ucu Noktası
         canvasCtx.fillStyle = "red";
         canvasCtx.beginPath();
         canvasCtx.arc(noseTip.x, noseTip.y, 4, 0, 2 * Math.PI);
@@ -231,7 +259,6 @@ const WebcamImg = () => {
       }
 
       // --- ARAYÜZ ÇİZİMLERİ (Çerçeve ve Yazı) ---
-      // Burası yüz olsa da olmasa da çalışır
       const status = statusRef.current;
       
       // 1. Ana Çerçeve
@@ -239,22 +266,26 @@ const WebcamImg = () => {
       canvasCtx.lineWidth = status.isReady ? 8 : 4; 
       canvasCtx.strokeRect(20, 20, width - 40, height - 40);
 
-      // 2. Durum Mesajı (YAZI TERS DÖNMESİN DİYE AYAR)
-      canvasCtx.save(); // Yazı için özel durum kaydet
+      // 2. Durum Mesajı
+      canvasCtx.save();
       if (facingMode === "user") {
-           // Eğer ön kameradaysak (yani tuval tersse), yazıyı düzeltmek için tekrar ters çeviriyoruz.
+           // Yazıyı düzeltmek için
            canvasCtx.scale(-1, 1);
            canvasCtx.translate(-width, 0);
       }
-      canvasCtx.font = "bold 36px Arial";
+      canvasCtx.font = "bold 32px Arial";
       canvasCtx.fillStyle = status.color;
       canvasCtx.textAlign = "center";
-      // Yüz varsa yazı üstte, yoksa ortada dursun
+      
+      // Yazı arka planı (Okunabilirlik için)
+      canvasCtx.shadowColor = "black";
+      canvasCtx.shadowBlur = 7;
+      
       const textY = hasFace ? height * 0.15 : height / 2;
       canvasCtx.fillText(status.message, width / 2, textY);
-      canvasCtx.restore(); // Yazı ayarlarını geri al
+      canvasCtx.restore();
 
-      canvasCtx.restore(); // --- ÇİZİM BİTİŞİ (GLOBAL RESTORE) ---
+      canvasCtx.restore(); 
     });
 
     const runDetection = async () => {
@@ -275,6 +306,7 @@ const WebcamImg = () => {
 
   // --- AKSİYONLAR ---
   const capturePhoto = () => {
+    // Sadece hazırsa çekime izin ver (Opsiyonel, şimdilik serbest bıraktık ama uyarı var)
     const frozenData = latestDataRef.current;
     setFinalResult({
         pd: frozenData.pd,
@@ -364,8 +396,8 @@ const WebcamImg = () => {
               </div>
               
               <div style={{display: 'flex', gap: '15px', width: '100%', maxWidth: '400px'}}>
-                  <button onClick={(ev) => { capturePhoto(); ev.preventDefault(); }} style={{ flex: 2, height: '50px', backgroundColor: '#FFC107', color: 'black', border: 'none', fontSize: '1.1rem', fontWeight: 'bold', borderRadius: '12px' }}>FOTOĞRAF ÇEK</button>
-                  <button onClick={(ev) => { toggleCamera(); ev.preventDefault(); }} style={{ flex: 1, height: '50px', backgroundColor: "rgba(255,255,255,0.2)", color: "white", border: "1px solid white", borderRadius: "12px", fontSize: '0.9rem' }}>ÇEVİR</button>
+                  <button onClick={(ev) => { capturePhoto(); ev.preventDefault(); }} style={{ flex: 2, height: '50px', backgroundColor: '#FFC107', color: 'black', border: 'none', fontSize: '1.1rem', fontWeight: 'bold', borderRadius: '12px', cursor: 'pointer' }}>FOTOĞRAF ÇEK</button>
+                  <button onClick={(ev) => { toggleCamera(); ev.preventDefault(); }} style={{ flex: 1, height: '50px', backgroundColor: "rgba(255,255,255,0.2)", color: "white", border: "1px solid white", borderRadius: "12px", fontSize: '0.9rem', cursor: 'pointer' }}>ÇEVİR</button>
               </div>
           </div>
         </div>
@@ -402,7 +434,7 @@ const WebcamImg = () => {
                  <span style={{color: 'white', fontSize: '1.5rem', fontWeight: 'bold'}}>{finalResult.pd} mm</span>
             </div>
           
-            <button onClick={(ev) => { resetPhoto(); ev.preventDefault(); }} style={{ width: '100%', height: '50px', backgroundColor: '#333', color: 'white', border: '1px solid #555', borderRadius: '12px', fontSize: '1.1rem' }}>
+            <button onClick={(ev) => { resetPhoto(); ev.preventDefault(); }} style={{ width: '100%', height: '50px', backgroundColor: '#333', color: 'white', border: '1px solid #555', borderRadius: '12px', fontSize: '1.1rem', cursor: 'pointer' }}>
                YENİ ÖLÇÜM
             </button>
           </div>
