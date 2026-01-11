@@ -1,8 +1,6 @@
 // Copyright 2023 MediaPipe & Malgorzata Pick
-// FINAL STABLE VERSION - CANVAS RENDERING & EXPLICIT LOGIC
-// Donma Sorunu: Çözüldü (Canvas Çizimi ile)
-// CSS Sorunu: Çözüldü (Fixed Positioning)
-// Hesaplama: 4'lü Hibrit Sistem (İris + Kutu + Dikey + Köprü)
+// FINAL "UNCOMPRESSED" VERSION - FULL FEATURE SET
+// Features: 4-Way Sensor Fusion, 3-Axis Slider, Distance Bar, Canvas Drawing, Fixed CSS
 
 import React, { Fragment, useEffect, useRef, useState, useCallback } from "react";
 import Webcam from "react-webcam";
@@ -16,31 +14,34 @@ import GlassesSelect from "../GlassesSelect";
 
 const WebcamImg = () => {
   // --------------------------------------------------------------------------
-  // 1. REFERANSLAR (PERFORMANS İÇİN KRİTİK)
+  // 1. GLOBAL REFERANSLAR (Performance Memory)
   // --------------------------------------------------------------------------
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const requestRef = useRef(null);
   
-  // Hesaplama verilerini State yerine Ref'te tutuyoruz (Donmayı engeller)
+  // Hesaplama verilerini burada tutuyoruz (State kullanırsak donar)
   const calibrationDataRef = useRef(null); 
-  const boxSettingsRef = useRef({ w: 1.0, h: 1.0, y: 0 }); 
+  const boxSettingsRef = useRef({ w: 1.0, h: 1.0, y: 0 }); // Slider Değerleri
+  
+  // Veri Yumuşatma Havuzu
   const latestDataRef = useRef({ pd: 0, left: 0, right: 0, hLeft: 0, hRight: 0 });
   const pdBufferRef = useRef([]); 
-  
+  const BUFFER_SIZE = 15; // Son 15 kareyi hafızada tut
+
   // --------------------------------------------------------------------------
-  // 2. STATE (SADECE EKRAN GEÇİŞLERİ VE UI)
+  // 2. UI STATE (Sadece Arayüz Güncellemeleri)
   // --------------------------------------------------------------------------
-  const [appState, setAppState] = useState("home"); // 'home' | 'info' | 'camera' | 'result'
+  const [appState, setAppState] = useState("home"); // home, info, camera, result
   const [imgSrc, setImgSrc] = useState(null);
   const [facingMode, setFacingMode] = useState("user"); 
   const [isModelLoaded, setIsModelLoaded] = useState(false);
-  
-  // UI Kontrolleri (Slider görünümü vs.)
+
+  // Slider'ın UI'da görünmesi için State (Döngüden bağımsız)
   const [showSliders, setShowSliders] = useState(false);
-  // Slider değerlerini UI'da göstermek için (Döngüden bağımsız)
   const [sliderUI, setSliderUI] = useState({ w: 1.0, h: 1.0, y: 0 });
 
+  // Sonuç Ekranı Verisi
   const [finalResult, setFinalResult] = useState({ 
       pd: "--", left: "--", right: "--", hLeft: "--", hRight: "--" 
   });
@@ -49,23 +50,29 @@ const WebcamImg = () => {
   // 3. YARDIMCI MATEMATİK FONKSİYONLARI
   // --------------------------------------------------------------------------
   
+  // İki nokta arası mesafe (Piksel)
   const getDistance = (p1, p2) => {
     return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
   };
 
-  // Veri Yumuşatma (Smoothing) - Titremeyi önler
+  // Veri Yumuşatma Algoritması (Titremeyi Önler)
   const updateSmoothedData = (newPD, newLeft, newRight, hLeft, hRight) => {
+    // Filtre 1: İmkansız değerleri at
     if (!newPD || isNaN(newPD) || newPD < 35 || newPD > 85) return;
     
-    // Ani veri sıçramalarını yoksay
+    // Filtre 2: Ani sıçramaları at (Önceki değerden çok farklıysa)
     if (latestDataRef.current.pd > 0 && Math.abs(newPD - latestDataRef.current.pd) > 10) return; 
 
-    // Buffer'a ekle
+    // Veriyi havuza ekle
     pdBufferRef.current.push({ pd: newPD, left: newLeft, right: newRight, hl: hLeft, hr: hRight });
-    if (pdBufferRef.current.length > 10) pdBufferRef.current.shift(); // Son 10 kareyi tut
+    
+    // Havuz dolduysa en eskiyi sil
+    if (pdBufferRef.current.length > BUFFER_SIZE) pdBufferRef.current.shift();
 
     const count = pdBufferRef.current.length;
-    // Ortalamasını al
+    if (count < 3) return; // Yeterli veri yoksa bekle
+
+    // Ortalamayı Hesapla
     const total = pdBufferRef.current.reduce((acc, curr) => ({
         pd: acc.pd + curr.pd,
         left: acc.left + curr.left,
@@ -74,6 +81,7 @@ const WebcamImg = () => {
         hr: acc.hr + curr.hr
     }), { pd: 0, left: 0, right: 0, hl:0, hr:0 });
 
+    // Global Referansı Güncelle
     latestDataRef.current = {
         pd: (total.pd / count).toFixed(1),
         left: (total.left / count).toFixed(1),
@@ -87,8 +95,10 @@ const WebcamImg = () => {
   // 4. HANDLERS (KULLANICI ETKİLEŞİMLERİ)
   // --------------------------------------------------------------------------
 
+  // Gözlük Seçimi Yapıldığında
   const handleFrameSelect = (data) => {
       calibrationDataRef.current = data;
+      
       if (data && data.width) {
           setShowSliders(true);
           // Varsayılan ayarlar
@@ -100,16 +110,18 @@ const WebcamImg = () => {
       }
   };
 
+  // Slider Oynatıldığında
   const handleSliderChange = (key, value) => {
       const val = parseFloat(value);
-      // 1. Ref'i güncelle (Anlık hesaplama için)
+      // 1. Ref'i güncelle (Hesaplama motoru buradan okur - HIZLI)
       boxSettingsRef.current = { ...boxSettingsRef.current, [key]: val };
-      // 2. State'i güncelle (Slider çubuğunun UI'da hareket etmesi için)
+      // 2. State'i güncelle (Slider çubuğu hareket etsin - UI)
       setSliderUI(prev => ({ ...prev, [key]: val }));
   };
 
+  // Kamerayı Çevir (Ön/Arka)
   const toggleCamera = useCallback(() => {
-    pdBufferRef.current = []; // Bufferı temizle
+    pdBufferRef.current = []; // Bufferı temizle ki eski veri kalmasın
     setFacingMode(prev => prev === "environment" ? "user" : "environment");
   }, []);
 
@@ -128,6 +140,7 @@ const WebcamImg = () => {
 
     const faceMesh = new FaceMesh({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}` });
     
+    // Model Ayarları (Hassas Mod)
     faceMesh.setOptions({
         maxNumFaces: 1,
         refineLandmarks: true,
@@ -135,6 +148,7 @@ const WebcamImg = () => {
         minTrackingConfidence: 0.7 
     });
     
+    // SONUÇLAR GELDİĞİNDE ÇALIŞACAK FONKSİYON (HER KAREDE)
     faceMesh.onResults((results) => {
       if (!isModelLoaded) setIsModelLoaded(true);
       if (appState !== "camera") return;
@@ -157,19 +171,21 @@ const WebcamImg = () => {
       // --- A. ARKA PLAN VE VİDEO ÇİZİMİ ---
       ctx.save(); 
       ctx.clearRect(0, 0, vW, vH);
+      
+      // Ön kamerada aynalama yap
       if (facingMode === "user") {
         ctx.translate(vW, 0);
         ctx.scale(-1, 1);
       }
       ctx.drawImage(results.image, 0, 0, vW, vH);
-      ctx.restore(); // Ayna modundan çık (Yazılar düz olsun)
+      ctx.restore(); 
 
       // --- B. YÜZ BULUNDUYSA İŞLEMLER ---
       if (results.multiFaceLandmarks && results.multiFaceLandmarks[0]) {
         const landmarks = results.multiFaceLandmarks[0];
         const toPx = (lm) => ({ x: lm.x * vW, y: lm.y * vH });
 
-        // Önemli Noktalar
+        // Önemli Noktalar (Landmarks)
         const pupilLeft = toPx(landmarks[468]);
         const pupilRight = toPx(landmarks[473]);
         const lCheek = toPx(landmarks[234]);
@@ -182,7 +198,7 @@ const WebcamImg = () => {
         // Yüz Genişliği (Piksel)
         const faceWidthPx = getDistance(lCheek, rCheek);
         
-        // --- C. HESAPLAMA MOTORU (4 FAKTÖRLÜ) ---
+        // --- C. HESAPLAMA MOTORU (4 FAKTÖRLÜ SENSOR FUSION) ---
         const calData = calibrationDataRef.current;
         const settings = boxSettingsRef.current;
         
@@ -194,26 +210,26 @@ const WebcamImg = () => {
         let ratios = []; // Tüm oranları burada toplayacağız
         let mmPerPixel = 0;
 
-        // 1. İris Faktörü (Her zaman çalışır)
+        // 1. FAKTÖR: İRİS (Her zaman çalışır, biyolojik sabit 11.7mm)
         if (avgIrisDia > 0) ratios.push(11.7 / avgIrisDia);
 
         // Kutu Değişkenleri (Çizim için)
         let boxW = 0, boxH = 0, centerX = 0, centerY = 0;
 
         if (calData && calData.width) {
-            // Kullanıcı slider ile kutu genişliğini belirler
+            // Slider ile ayarlanan genişlik
             boxW = faceWidthPx * settings.w; 
             
-            // 2. Kutu Genişlik Faktörü
+            // 2. FAKTÖR: KUTU GENİŞLİĞİ (Veritabanı / Kutu)
             ratios.push(calData.width / boxW);
 
-            // 3. Kutu Yükseklik Faktörü
+            // 3. FAKTÖR: KUTU YÜKSEKLİĞİ (Varsa)
             boxH = boxW * 0.35 * settings.h;
             if (calData.height) {
                 ratios.push(calData.height / boxH);
             }
 
-            // 4. Köprü (Bridge) Faktörü
+            // 4. FAKTÖR: KÖPRÜ (Bridge)
             if (calData.bridge) {
                 const bridgePx = getDistance(lInner, rInner);
                 // Göz pınarı arası ~ Köprü + 2mm (tahmini)
@@ -221,19 +237,8 @@ const WebcamImg = () => {
             }
 
             // Kutu Merkezi (Pupil Orta Noktası + Y Offset)
-            // Çizim yaparken ayna moduna dikkat etmeliyiz.
-            // landmarks.x aynalanmış görüntüye göre gelir.
-            // Ancak drawRect yaparken 'user' modunda olduğumuz için koordinatları düzeltmeliyiz.
-            let plX = pupilLeft.x;
-            let prX = pupilRight.x;
-            
-            // Aynalama düzeltmesi: Eğer ön kameradaysak, X koordinatını ters çevirmemiz lazım çizim için
-            // Ama dur! Pupil koordinatlarını toPx ile alırken zaten (x * width) yaptık.
-            // Mediapipe user modunda X'i (1-x) olarak vermiyor, normal veriyor.
-            // Biz canvas'ı translate(-1, 1) yapıp çizdiğimiz için video ters dönüyor.
-            // En temizi: Çizimleri de translate(-1, 1) içinde yapmak.
-            
-            ctx.save(); // Çizim için ayna modunu tekrar aç
+            // Çizim için koordinat düzeltmesi
+            ctx.save();
             if (facingMode === "user") {
                 ctx.translate(vW, 0);
                 ctx.scale(-1, 1);
@@ -285,7 +290,7 @@ const WebcamImg = () => {
             );
         }
 
-        // --- D. DİĞER ÇİZİMLER (CANVAS - SIFIR MALİYET) ---
+        // --- D. DİĞER ÇİZİMLER (CANVAS ÜZERİNE) ---
         ctx.save();
         if (facingMode === "user") { ctx.translate(vW, 0); ctx.scale(-1, 1); }
 
@@ -304,19 +309,18 @@ const WebcamImg = () => {
 
         ctx.restore();
 
-        // --- E. BİLGİ EKRANI (CANVAS ÜZERİNE YAZI) ---
-        // React State kullanmıyoruz, Canvas'a yazıyoruz. Donma sıfır.
+        // --- E. BİLGİ EKRANI (CANVAS ÜZERİNE YAZI - DONMAYI ENGELLER) ---
         
         // Üst Bar (Arka Plan)
         ctx.fillStyle = "rgba(0,0,0,0.6)";
-        ctx.fillRect(0, 0, vW, 50);
+        ctx.fillRect(0, 0, vW, 60);
 
         // PD Değeri
         const currentVal = latestDataRef.current.pd > 0 ? latestDataRef.current.pd : "--";
         ctx.fillStyle = "#00FF00";
         ctx.font = "bold 30px Arial";
         ctx.textAlign = "center";
-        ctx.fillText(`${currentVal} mm`, vW / 2, 35);
+        ctx.fillText(`${currentVal} mm`, vW / 2, 40);
 
         // Mesafe Kontrolü (Alt Bar)
         const screenRatio = faceWidthPx / vW;
@@ -328,19 +332,19 @@ const WebcamImg = () => {
 
         ctx.fillStyle = color;
         ctx.font = "bold 18px Arial";
-        ctx.fillText(msg, vW / 2, vH - 20);
+        ctx.fillText(msg, vW / 2, vH - 25);
 
-        // Mesafe Barı
+        // Mesafe Barı (Görsel)
         const barW = 200;
-        const barH = 6;
+        const barH = 8;
         ctx.fillStyle = "#333";
-        ctx.fillRect((vW - barW)/2, vH - 45, barW, barH);
+        ctx.fillRect((vW - barW)/2, vH - 50, barW, barH);
         
-        let fillPct = (screenRatio - 0.25) / (0.75 - 0.25); // 0 ile 1 arası normalize et
-        if (fillPct < 0) fillPct = 0; if (fillPct > 1) fillPct = 1;
+        let fillPct = (screenRatio - 0.25) / (0.75 - 0.25);
+        if(fillPct<0) fillPct=0; if(fillPct>1) fillPct=1;
         
         ctx.fillStyle = color;
-        ctx.fillRect((vW - barW)/2, vH - 45, barW * fillPct, barH);
+        ctx.fillRect((vW - barW)/2, vH - 50, barW * fillPct, barH);
 
       } else {
           // YÜZ YOKSA
@@ -375,7 +379,6 @@ const WebcamImg = () => {
   const capturePhoto = () => {
     const data = latestDataRef.current;
     
-    // Veri kontrolü yok, ne varsa onu çeker (Kullanıcıyı engelleme)
     setFinalResult({
         pd: data.pd || "--", 
         left: data.left || "--", 
@@ -397,31 +400,31 @@ const WebcamImg = () => {
   };
 
   // --------------------------------------------------------------------------
-  // 7. CSS STİLLERİ (SABİT POZİSYON - KAYMA YOK)
+  // 7. CSS STİLLERİ (FIXED POSITION - KAYMA ÖNLEME)
   // --------------------------------------------------------------------------
   const styles = {
-      // Ana Konteyner (Ekranı tamamen kaplar, kaydırmayı engeller)
+      // Ana Konteyner
       overlay: { 
           position: 'fixed', top: 0, left: 0, width: '100%', height: '100dvh', 
           backgroundColor: 'black', zIndex: 1000, display: 'flex', flexDirection: 'column', 
           overflow: 'hidden' 
       },
-      // Kaydırılabilir Alan (Info ve Result ekranları için)
+      // İçerik Alanı
       scrollContent: { 
           flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', 
           flexDirection: 'column', alignItems: 'center' 
       },
-      // Kamera Alanı (Esnek)
+      // Kamera Konteyner
       camContainer: { 
-          flex: 1, position: 'relative', width: '100%', background: '#000', 
+          flex: 1, position: 'relative', background: '#000', 
           display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden' 
       },
-      // Video ve Canvas (Üst üste tam oturur)
+      // Tam Ekran Ögeler
       abs: { 
           position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', 
           objectFit: 'contain' 
       },
-      // Alt Kontrol Paneli (Sabit yükseklik)
+      // Alt Kontroller
       controls: { 
           height: '80px', padding: '10px', background: '#111', 
           display: 'flex', gap: '10px', justifyContent: 'center', alignItems: 'center',
@@ -431,14 +434,14 @@ const WebcamImg = () => {
           flex: 1, height: '50px', borderRadius: '10px', border: 'none', 
           fontWeight: 'bold', fontSize: '1rem', cursor: 'pointer', color: 'black' 
       },
-      // Slider Kutusu (Yarı saydam, altta yüzer)
+      // Slider Kutusu
       sliderBox: { 
           position: 'absolute', bottom: '10px', left: '5%', width: '90%', 
           padding: '10px', background: 'rgba(0,0,0,0.7)', borderRadius: '10px', zIndex: 50,
           border: '1px solid #444'
       },
       row: { display: 'flex', color: 'white', marginBottom: '8px', alignItems: 'center', fontSize: '12px' },
-      range: { flex: 1, marginLeft: '10px', accentColor: '#D4AF37' }
+      range: { flex: 1, marginLeft: '10px' }
   };
 
   // --------------------------------------------------------------------------
@@ -471,7 +474,7 @@ const WebcamImg = () => {
                 <div style={styles.camContainer}>
                     {!isModelLoaded && <h3 style={{color: '#D4AF37', zIndex: 10}}>Yükleniyor...</h3>}
                     
-                    {/* Gözlük Seçimi (Üstte Yüzer) */}
+                    {/* Gözlük Seçimi (Üstte) */}
                     <div style={{position: 'absolute', top: 60, width: '90%', zIndex: 40}}>
                         <GlassesSelect onFrameSelect={handleFrameSelect} />
                     </div>
